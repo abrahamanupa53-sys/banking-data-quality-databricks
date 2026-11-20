@@ -4,7 +4,7 @@ This project checks the quality of banking data. A bank copies its daily transac
 
 ## What the project does
 
-- Loads 4 CSV files into Azure Databricks using **explicit schemas** (no `inferSchema`).
+- Loads 4 CSV files into Azure Databricks using **schemas written as simple text strings** (no `inferSchema`).
 - Cleans the data in layers: **Bronze → Silver → Gold** (the medallion architecture).
 - Runs **8 data quality checks** (assignment questions 2 to 9).
 - Saves every bad record and a summary of the results as **Delta tables**.
@@ -18,8 +18,8 @@ This project checks the quality of banking data. A bank copies its daily transac
  banking/dq/raw/    as text             -> NULL, typed
 ```
 
-- **Bronze** keeps the data exactly as it arrived. Every column is read as text (`StringType`), so nothing is lost or changed by mistake.
-- **Silver** cleans it: removes extra spaces, turns blank values into NULL, and converts columns to the right types (numbers, dates). Duplicates are kept on purpose, so check 6 can find them.
+- **Bronze** keeps the data exactly as it arrived. Every column is read as text (`STRING`), so nothing is lost or changed by mistake.
+- **Silver** cleans it: removes extra spaces, turns blank values into NULL, and converts columns to the right types with `try_cast` (Amount and Balance to `decimal(18,2)`, Transaction_Date to `date`). Duplicates are kept on purpose, so check 6 can find them.
 - **Gold** holds the final results: one table with every exception, and one summary table.
 
 The full diagram is in `architecture/banking_dq_architecture.drawio`.
@@ -69,9 +69,12 @@ banking-data-quality/
 
 ## How to run it
 
-1. **Create the catalog and schema** in Databricks (Unity Catalog):
+1. **Set up storage and the catalog:**
+   - Create an ADLS Gen2 storage account with a container called `banking`.
+   - Give the Databricks access connector the **Storage Blob Data Contributor** role on it.
+   - In Catalog Explorer, create the external location `banking_loc` for that container, then create the catalog `banking` on it.
+   - Create the schema and volume (this is what `01_setup` does):
    ```sql
-   CREATE CATALOG IF NOT EXISTS banking;
    CREATE SCHEMA IF NOT EXISTS banking.dq;
    CREATE VOLUME IF NOT EXISTS banking.dq.raw;
    ```
@@ -106,7 +109,12 @@ banking-data-quality/
 
 ## Design choices
 
-- **No `inferSchema`.** Every file is read with a schema written out by hand (`StructType`). This is faster, and Spark can't guess a wrong type (for example, reading a mobile number as a number and losing a leading zero).
+- **No `inferSchema`.** Every file is read with a schema written by hand as a simple text string, for example:
+  ```python
+  customers_schema = "Customer_ID STRING, Customer_Name STRING, City STRING, Mobile_Number STRING, KYC_Status STRING"
+  df_customers = spark.read.csv("/Volumes/banking/dq/raw/customers.csv", header=True, schema=customers_schema)
+  ```
+  This is faster, and Spark can't guess a wrong type (for example, reading a mobile number as a number and losing a leading zero).
 - **Bronze is all text.** Converting types happens later, in Silver, so bad values show up as NULL that we can count instead of making the load fail.
 - **Trim before checking.** Values that are only spaces count as missing.
 - **Delta tables for output.** They are reliable, can be queried with SQL, and keep a history of changes.
